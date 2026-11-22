@@ -76,6 +76,7 @@ EXTRA_COLUMNS = {
     "chat_json": "TEXT",       # 精读里的答题点评、问老师记录
     "media_type": "TEXT",      # video / note（图文）
     "images_json": "TEXT",     # 图文的图片（相对于笔记目录的路径列表）
+    "tokens": "INTEGER",       # 这条笔记累计花掉的 AI token（提炼 + 精读 + 问答，含重试）
 }
 
 
@@ -153,6 +154,16 @@ def delete(item_id):
         conn().commit()
 
 
+def add_tokens(item_id, n):
+    """把一次 AI 消耗累加到这条笔记上。单条 SQL 自增，多线程同时记也不会互相冲掉。"""
+    n = int(n or 0)
+    if not n:
+        return
+    with _write_lock:
+        conn().execute("UPDATE items SET tokens=COALESCE(tokens,0)+? WHERE id=?", (n, item_id))
+        conn().commit()
+
+
 def next_queued():
     return _row(conn().execute(
         "SELECT * FROM items WHERE status='queued' ORDER BY id LIMIT 1").fetchone())
@@ -195,7 +206,7 @@ def list_items(status=None, category=None, q=None, learned=None, starred=None, l
 def done_items():
     """学习库里的全部笔记（含 JSON 字段），图谱、共识观点和周报用。"""
     return [_row(r) for r in conn().execute(
-        "SELECT id,title,author,category,learned,learned_at,starred,created_at,md_path,media_type,"
+        "SELECT id,title,author,category,learned,learned_at,starred,created_at,md_path,media_type,tokens,"
         "note_json,deep_json,chat_json FROM items WHERE status='done' ORDER BY id")]
 
 

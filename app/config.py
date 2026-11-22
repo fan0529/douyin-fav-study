@@ -120,7 +120,7 @@ DEFAULTS = {
     "timing": {},                       # 各步骤实际耗时（用来估算剩余时间）
 }
 
-_lock = threading.Lock()
+_lock = threading.RLock()   # 可重入：add_tokens 会持锁调用 load()/save()
 
 
 def load():
@@ -162,13 +162,17 @@ def week_key(t=None) -> str:
 
 
 def add_tokens(n: int):
-    if n:
+    """记一次 AI 消耗。整段持锁，避免两个线程同时「读-改-写」把对方的数冲掉。"""
+    n = int(n or 0)
+    if not n:
+        return
+    with _lock:
         s = load()
         weekly = dict(s.get("tokens_weekly") or {})
         wk = week_key()
-        weekly[wk] = int(weekly.get(wk, 0)) + int(n)
+        weekly[wk] = int(weekly.get(wk, 0)) + n
         weekly = dict(sorted(weekly.items())[-12:])
-        save({"tokens_used": int(s.get("tokens_used", 0)) + int(n), "tokens_weekly": weekly})
+        save({"tokens_used": int(s.get("tokens_used", 0)) + n, "tokens_weekly": weekly})
 
 
 def public(s: dict) -> dict:

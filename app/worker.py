@@ -208,6 +208,8 @@ class Worker:
             note, used = llm.extract(s, it.get("title"), it.get("author"), it["transcript"],
                                      kind="note" if it.get("media_type") == "note" else "video")
             config.add_tokens(used)
+            # 同时记到这一条上：重复提炼会累加，以后能算「这条视频花了多少」
+            db.add_tokens(it["id"], used)
             if note.get("skip"):
                 db.update(it["id"], status="skipped", reason=note.get("skip_reason"), note=None)
                 self.log(f"[{it['id']}] 跳过：{note.get('skip_reason')}")

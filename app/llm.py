@@ -114,6 +114,16 @@ def _post(url, headers, payload, timeout=120):
         return json.loads(r.read().decode("utf-8"))
 
 
+def _estimate_used(messages, reply=""):
+    """接口没返回 usage 时按字符数估一个，避免把消耗静默记成 0。
+
+    实测中文正文约 0.6 token/字（GLM-5.3-Flash：10794 字 → 6632 token，8539 字 → 5065 token），
+    英文和 JSON 符号更省，整体取 0.6 已经够贴近。
+    """
+    chars = sum(len(str(m.get("content") or "")) for m in messages) + len(reply or "")
+    return int(chars * 0.6)
+
+
 def _as_cfg(c):
     """兼容传整份设置或已经整理好的模型配置。"""
     if "kind" in c:
@@ -179,6 +189,7 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
 
     attempt = 0
     trunc_retry = False
+    acc = 0  # 被截断重发的那几次也已经计费了，最后一起加上
     while True:
         attempt += 1
         try:
@@ -186,13 +197,13 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
             if cfg.get("kind") == "anthropic":
                 text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
                 u = data.get("usage") or {}
-                used = (u.get("input_tokens") or 0) + (u.get("output_tokens") or 0)
+                used = ((u.get("input_tokens") or 0) + (u.get("output_tokens") or 0)) or _estimate_used(messages, text)
                 if data.get("stop_reason") == "max_tokens" and json_mode:
                     raise LLMError("AI 输出太长被截断了，可以在设置里把精读分段字数调小再试")
             else:
                 ch = data["choices"][0]
                 text = ch["message"]["content"] or ""
-                used = (data.get("usage") or {}).get("total_tokens", 0)
+                used = int((data.get("usage") or {}).get("total_tokens") or 0) or _estimate_used(messages, text)
                 if ch.get("finish_reason") == "length" and json_mode:
                     # 输出到这个模型的上限了。原因多半是推理模型把额度花在「思考」上，
                     # 正文只写了一半。先试一次更大的上限，不行就把能救的部分救回来。
@@ -201,6 +212,7 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
                     cap = _MAX_OUT.get(qk)
                     if not trunc_retry and cur < 32000 and (cap is None or cur < cap):
                         trunc_retry = True
+                        acc += used
                         nxt = min(max(cur * 2, 8192), 32000)
                         if "max_completion_tokens" in payload:
                             payload["max_completion_tokens"] = nxt
@@ -211,11 +223,11 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
                     if fixed is not None:
                         print(f"[提醒] AI 输出被截断（上限 {cur} tokens），已按生成到一半的内容保存。",
                               flush=True)
-                        return json.dumps(fixed, ensure_ascii=False), used
+                        return json.dumps(fixed, ensure_ascii=False), used + acc
                     raise LLMError(
                         f"AI 输出被截断：单次最多只能写 {cur} 个 token，这条视频内容太长写不下。"
                         "可以换输出上限更大的模型，或者把「最长转录分钟数」调小一点。")
-            return text, used
+            return text, used + acc
         except urllib.error.HTTPError as e:
             body = ""
             try:

@@ -323,10 +323,11 @@ class DeepRunner:
             db.update(item_id, chat=chat)
         self.log(f"[{item_id}] ✗ 精读失败：{msg}")
 
-    def _call(self, cfg, messages, max_tokens):
+    def _call(self, item_id, cfg, messages, max_tokens):
         t0 = time.time()
         d, used = llm.chat_json(cfg, messages, json_mode=True, temperature=0.3, max_tokens=max_tokens, timeout=300)
         config.add_tokens(used)
+        db.add_tokens(item_id, used)
         progress.learn("deep_call", time.time() - t0)
         return d
 
@@ -360,7 +361,7 @@ class DeepRunner:
             parts = []
             for i, ch in enumerate(chunks, 1):
                 self._set(step=i, step_start=time.time(), label=f"分段预读 {i}/{len(chunks)}")
-                d = self._call(cfg, [
+                d = self._call(item_id, cfg, [
                     {"role": "system", "content": CHUNK_SYSTEM % {"i": i, "n": len(chunks)}},
                     {"role": "user", "content": f"标题：{title}\n\n第 {i} 段文字稿：\n{ch}"},
                 ], max_tokens=4000)
@@ -373,7 +374,7 @@ class DeepRunner:
             body = "\n".join(lines)
             kind = "文字稿（[mm:ss] 是时间戳）" if timed else "文字稿"
 
-        d = self._call(cfg, [
+        d = self._call(item_id, cfg, [
             {"role": "system", "content": system},
             {"role": "user", "content": USER % {"title": title, "author": it.get("author") or "（未知）",
                                                 "kind": kind, "body": body}},
@@ -444,6 +445,7 @@ def check_answer(item_id, idx, answer):
         {"role": "system", "content": CHECK_SYSTEM}, {"role": "user", "content": msg}],
         json_mode=False, temperature=0.4, max_tokens=800, timeout=180)
     config.add_tokens(used)
+    db.add_tokens(item_id, used)
     chat = it.get("chat") or {}
     chat.setdefault("checks", {})[str(idx)] = {"answer": answer, "feedback": text.strip(), "t": time.time()}
     db.update(item_id, chat=chat)
@@ -464,6 +466,7 @@ def ask(item_id, question):
     text, used = llm.chat(config.llm_cfg(s, "deep"), messages, json_mode=False, temperature=0.5,
                           max_tokens=1500, timeout=180)
     config.add_tokens(used)
+    db.add_tokens(item_id, used)
     chat.setdefault("ask", []).append({"q": question, "a": text.strip(), "t": time.time()})
     db.update(item_id, chat=chat)
     return chat["ask"][-1]
