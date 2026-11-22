@@ -58,6 +58,13 @@ def render(item: dict, md_dir: Path = None) -> str:
         if body:
             lines.extend([f"## {name}", "", *body, ""])
 
+    def _li(text, prefix="- ", indent="  "):
+        """列表项里如果带换行，把续行缩进对齐，Markdown 才不会断成散段。"""
+        parts = str(text or "").splitlines()
+        if not parts:
+            return prefix.rstrip()
+        return prefix + parts[0] + "".join("\n" + indent + x for x in parts[1:] if x.strip())
+
     section("一句话总结", [n.get("summary", "")] if n.get("summary") else [])
     if item.get("images"):
         lib = library_dir()
@@ -67,10 +74,9 @@ def render(item: dict, md_dir: Path = None) -> str:
             link = os.path.relpath(target, md_dir).replace(os.sep, "/") if md_dir else rel
             body.append(f"![图{i}](<{link}>)")
         section("原图", body)
-    section("核心观点", [f"- {p}" for p in n.get("points", [])])
-    section("照着做", [f"{i}. {s}" for i, s in enumerate(n.get("steps", []), 1)])
-    section("提到的工具", [f"- **{t['name']}**：{t.get('use', '')}" for t in n.get("tools", [])])
-    section("关键概念", [f"- **{c['term']}**：{c.get('explain', '')}" for c in n.get("concepts", [])])
+    section("逐段记录", [_li(p) for p in n.get("points", [])])
+    section("提到的工具", [_li(f"**{t['name']}**：{t.get('use', '')}") for t in n.get("tools", [])])
+    section("记住这几条", [_li(f"**{c['term']}**：{c.get('explain', '')}") for c in n.get("concepts", [])])
     if n.get("quiz"):
         body = []
         for i, q in enumerate(n["quiz"], 1):

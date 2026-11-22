@@ -2,6 +2,8 @@
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// 先转义再把换行变成 <br>：笔记正文是纯文本，多段内容靠换行分段。
+const escML = (s) => esc(s).replace(/\r\n?|\n/g, "<br>");
 const view = $("#view");
 
 /* ---------------------------------------------------------------- 线条图标（Lucide 风格，ISC 开源协议） */
@@ -303,17 +305,33 @@ function gridHtml(items) {
 }
 
 /* ---------------------------------------------------------------- 笔记详情 */
+/** 把「【小标题】正文」拆成 [小标题, 正文]；没有【】就返回空标题。 */
+function splitHead(s) {
+  const m = /^【([^】]{1,40})】\s*/.exec(s || "");
+  return m ? [m[1], (s || "").slice(m[0].length)] : ["", s || ""];
+}
+
 function noteBody(it) {
   const n = it.note || {};
-  const sec = (title, html) => (html ? `<section><h2>${title}</h2>${html}</section>` : "");
+  const sec = (title, note, html) => (html ? `<section><h2>${title}${note ? `<em>${note}</em>` : ""}</h2>${html}</section>` : "");
+  const pts = (n.points || []).map((p, i) => { const [h, b] = splitHead(p); return { h, b, i }; });
+  const heads = pts.filter((o) => o.h);
+  const toc = heads.length >= 4
+    ? `<nav class="toc">${heads.map((o) => `<a href="javascript:void 0" data-jump="pt${o.i}">${esc(o.h)}</a>`).join("")}</nav>`
+    : "";
+  const guide = (n.summary || toc)
+    ? `<div class="guide">${n.summary ? `<p>${escML(n.summary)}</p>` : ""}${toc}</div>` : "";
   return `
-    ${sec("一句话总结", n.summary ? `<div class="summary">${esc(n.summary)}</div>` : "")}
-    ${sec("核心观点", n.points?.length ? `<ol class="points">${n.points.map((p) => `<li>${esc(p)}</li>`).join("")}</ol>` : "")}
-    ${sec("照着做", n.steps?.length ? `<ol class="steps">${n.steps.map((p) => `<li><div>${esc(p)}</div></li>`).join("")}</ol>` : "")}
-    ${sec("提到的工具", n.tools?.length ? `<div class="kv">${n.tools.map((t) => `<div><b>${esc(t.name)}</b><span>${esc(t.use)}</span></div>`).join("")}</div>` : "")}
-    ${sec("关键概念", n.concepts?.length ? `<div class="kv">${n.concepts.map((t) => `<div><b>${esc(t.term)}</b><span>${esc(t.explain)}</span></div>`).join("")}</div>` : "")}
-    ${sec("自测一下", n.quiz?.length ? `<div class="quiz">${n.quiz.map((q, i) => `<div class="q"><b>${i + 1}. ${esc(q.q)}</b>
-        <div class="row" style="margin-top:6px"><button class="btn sm" data-reveal>看答案</button></div><div class="a">${ico("check", "ic sm")} ${esc(q.a)}</div></div>`).join("")}</div>` : "")}`;
+    ${guide}
+    ${sec("逐段记录", pts.length ? `${pts.length} 条` : "",
+      pts.length ? `<ol class="points">${pts.map((o) => `<li id="pt${o.i}">${o.h ? `<h3>${esc(o.h)}</h3>` : ""}<p>${escML(o.b)}</p></li>`).join("")}</ol>` : "")}
+    ${sec("提到的工具", n.tools?.length ? `${n.tools.length} 个` : "",
+      n.tools?.length ? `<div class="kv">${n.tools.map((t) => `<div><b>${esc(t.name)}</b><span>${escML(t.use)}</span></div>`).join("")}</div>` : "")}
+    ${sec("记住这几条", n.concepts?.length ? `${n.concepts.length} 条` : "",
+      n.concepts?.length ? `<ul class="takeaways">${n.concepts.map((t) => `<li><b>${esc(t.term)}</b><p>${escML(t.explain)}</p></li>`).join("")}</ul>` : "")}
+    ${sec("自测", n.quiz?.length ? `${n.quiz.length} 题` : "",
+      n.quiz?.length ? `<details class="quiz-fold"><summary>点开检验一下有没有真的读懂</summary><div class="quiz">${n.quiz.map((q, i) => `<div class="q"><b>${i + 1}. ${escML(q.q)}</b>
+        <div class="row" style="margin-top:6px"><button class="btn sm" data-reveal>看答案</button></div><div class="a">${ico("check", "ic sm")} ${escML(q.a)}</div></div>`).join("")}</div></details>` : "")}`;
 }
 
 let itemTab = "note";
@@ -425,6 +443,10 @@ function renderTab() {
       (it.note ? noteBody(it) : `<div class="empty" style="padding:30px">这条还没有笔记。${it.transcript ? "可以直接去「带我精读」。" : ""}</div>`);
     bindGallery(el, it.images);
     $$("[data-reveal]", el).forEach((b) => b.onclick = () => { b.closest(".q").classList.add("open"); b.remove(); });
+    $$("[data-jump]", el).forEach((a) => a.onclick = () => {
+      const t = el.querySelector("#" + a.dataset.jump);
+      if (t) t.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   } else if (itemTab === "text") {
     renderTextTab(el);
   } else {
@@ -866,7 +888,8 @@ async function renderSettings() {
           ${[["tiny", "tiny：最快，准确率低"], ["base", "base：较快，够用"], ["small", "small：推荐，准确率和速度平衡"], ["medium", "medium：更准，但慢很多"]]
             .map(([k, l]) => `<option value="${k}" ${s.whisper_model === k ? "selected" : ""}>${l}</option>`).join("")}</select>
           <div class="hint">只在用通用版时生效。第一次使用会自动下载（small 约 480MB）。</div></div>
-        <div class="field"><label>超长视频只转录前几分钟</label><input id="maxMin" type="number" min="1" max="120" value="${s.max_minutes}"></div>
+        <div class="field"><label>超长视频只转录前几分钟</label><input id="maxMin" type="number" min="0" max="600" value="${s.max_minutes}">
+          <div class="hint">填 <b>0 = 整条转写</b>（默认）。填 15 就只转前 15 分钟，后面的内容不会进笔记。</div></div>
       </div>
       <div class="field"><label>图片文字识别（图文用）</label>
         <div class="${STATE.ocr?.backend ? "" : "banner warn"}" style="${STATE.ocr?.backend ? "" : "margin:0"}">${STATE.ocr?.backend ? `✓ ${esc(STATE.ocr.label)}（在本机运行，图片不上传）` : "还没安装文字识别组件：请重新运行一次安装脚本。没装的话，图文只会用正文文字。"}</div></div>

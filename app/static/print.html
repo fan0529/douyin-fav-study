@@ -16,6 +16,11 @@
   ul, ol { padding-left: 22px; margin: 0; }
   li { margin: 3px 0; }
   .kv b { margin-right: 6px; }
+  .pts li { margin: 7px 0; }
+  .pts b { display: block; margin-bottom: 2px; }
+  .takeaways { list-style: none; padding-left: 0; }
+  .takeaways li { margin: 9px 0; padding-left: 14px; border-left: 2px solid #0071e3; }
+  .takeaways b { display: block; }
   .transcript { color: #424245; font-size: 12.5px; white-space: pre-wrap; }
   .mine { background: #f5f5f7; padding: 8px 12px; border-radius: 6px; white-space: pre-wrap; }
   @media print { .tip { display: none; } body { margin: 0 auto; } @page { margin: 16mm 14mm; } }
@@ -27,6 +32,9 @@
 <div id="out">加载中…</div>
 <script>
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const escML = (s) => esc(s).replace(/\r\n?|\n/g, "<br>");
+/** 把「【小标题】正文」拆成两行，PDF 里读起来才有层次。 */
+const splitHead = (s) => { const m = /^【([^】]{1,40})】\s*/.exec(s || ""); return m ? [m[1], (s || "").slice(m[0].length)] : ["", s || ""]; };
 const ids = (new URLSearchParams(location.search).get("ids") || "").split(",").filter(Boolean);
 let items = [];
 function draw() {
@@ -34,15 +42,16 @@ function draw() {
   document.getElementById("out").innerHTML = items.map((it) => {
     const n = it.note || {};
     const list = (arr, ord) => arr && arr.length ? `<${ord ? "ol" : "ul"}>${arr.map((x) => `<li>${x}</li>`).join("")}</${ord ? "ol" : "ul"}>` : "";
+    const pts = (arr) => arr && arr.length
+      ? `<ol class="pts">${arr.map((p) => { const [h, b] = splitHead(p); return `<li>${h ? `<b>${esc(h)}</b>` : ""}${escML(b)}</li>`; }).join("")}</ol>` : "";
     const sec = (t, h) => h ? `<h2>${t}</h2>${h}` : "";
     return `<article>
       <h1>${esc(n.title || it.title)}</h1>
       <div class="meta">${esc(n.category || "")} ${n.difficulty ? "· " + esc(n.difficulty) : ""} ${it.author ? "· 作者：" + esc(it.author) : ""} ${it.url ? "· " + esc(it.url) : ""}</div>
-      ${sec("一句话总结", n.summary ? `<div class="summary">${esc(n.summary)}</div>` : "")}
-      ${sec("核心观点", list((n.points || []).map(esc), true))}
-      ${sec("照着做", list((n.steps || []).map(esc), true))}
-      ${sec("提到的工具", list((n.tools || []).map((t) => `<span class="kv"><b>${esc(t.name)}</b>${esc(t.use)}</span>`)))}
-      ${sec("关键概念", list((n.concepts || []).map((t) => `<span class="kv"><b>${esc(t.term)}</b>${esc(t.explain)}</span>`)))}
+      ${sec("一句话总结", n.summary ? `<div class="summary">${escML(n.summary)}</div>` : "")}
+      ${sec("逐段记录", pts(n.points))}
+      ${sec("提到的工具", list((n.tools || []).map((t) => `<span class="kv"><b>${esc(t.name)}</b>${escML(t.use)}</span>`)))}
+      ${sec("记住这几条", n.concepts && n.concepts.length ? `<ul class="takeaways">${n.concepts.map((t) => `<li><b>${esc(t.term)}</b>${escML(t.explain)}</li>`).join("")}</ul>` : "")}
       ${sec("自测题", list((n.quiz || []).map((q) => `${esc(q.q)}<br><span style="color:#248a3d">答：${esc(q.a)}</span>`), true))}
       ${sec("我的笔记", (it.my_note || "").trim() ? `<div class="mine">${esc(it.my_note)}</div>` : "")}
       ${withTr && it.transcript ? sec("原文转录", `<div class="transcript">${esc(it.transcript)}</div>`) : ""}

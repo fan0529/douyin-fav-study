@@ -46,7 +46,7 @@ def pick_engine(pref="auto"):
 
 
 def engine_status():
-    return {"apple_silicon": is_apple_silicon(), "mlx_available": mlx_available()}
+    return {"apple_silicon": is_apple_silicon(), "mlx_available": mlx_available(), "cuda": cuda_available()}
 
 
 def has_audio(path) -> bool:
@@ -115,25 +115,73 @@ def _setup_hf(use_mirror):
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 
-def _faster_model(size, log):
+def add_cuda_dlls():
+    """Windows：把 pip 装的 cuDNN / cuBLAS 目录加进 DLL 搜索路径。
+
+    ctranslate2 是延迟加载这些库的：模型能建出来，但真正开始推理时才去找
+    cudnn_ops64_9.dll，找不到就报 "Could not locate ... in your library path"。
+    """
+    if os.name != "nt":
+        return
+    try:
+        import glob
+        import sysconfig
+        root = sysconfig.get_paths()["purelib"]
+        dirs = glob.glob(os.path.join(root, "nvidia", "*", "bin"))
+        if not dirs:
+            return
+        os.environ["PATH"] = ";".join(dirs) + ";" + os.environ.get("PATH", "")
+        for d in dirs:
+            try:
+                os.add_dll_directory(d)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
+def cuda_available():
+    """有没有能用的 NVIDIA 显卡（驱动 + CUDA 版 ctranslate2）。"""
+    add_cuda_dlls()
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count() > 0
+    except Exception:
+        return False
+
+
+def _faster_model(size, log, device="cpu", compute_type="int8"):
     global _model, _model_key
     with _lock:
-        key = ("faster", size)
+        key = ("faster", size, device, compute_type)
         if _model is not None and _model_key == key:
             return _model
         from faster_whisper import WhisperModel
-        log(f"加载语音识别模型 faster-whisper {size}（第一次会自动下载，small 约 480MB）……")
-        _model = WhisperModel(size, device="cpu", compute_type="int8", download_root=str(MODELS_DIR))
+        where = "GPU 加速" if device == "cuda" else "CPU"
+        log(f"加载语音识别模型 faster-whisper {size} / {where}（第一次会自动下载，small 约 480MB）……")
+        _model = WhisperModel(size, device=device, compute_type=compute_type, download_root=str(MODELS_DIR))
         _model_key = key
         log("语音识别模型已就绪。")
         return _model
 
 
-def _run_faster(audio, size, log, should_stop, on_progress):
-    model = _faster_model(size, log)
+def _run_faster(audio, size, log, should_stop, on_progress, device="auto", beam_size=5):
+    pref = (device or "auto").lower()
+    dev = "cuda" if (pref == "cuda" or (pref == "auto" and cuda_available())) else "cpu"
+    compute = "float16" if dev == "cuda" else "int8"
+    try:
+        model = _faster_model(size, log, dev, compute)
+    except Exception as e:
+        if dev != "cpu":
+            # 显卡驱动太旧、显存不够、CUDA 库缺失……都退回 CPU，别让整条视频失败
+            log(f"GPU 用不了（{str(e)[:90]}），改用 CPU 转写，会慢一些……")
+            dev, compute = "cpu", "int8"
+            model = _faster_model(size, log, dev, compute)
+        else:
+            raise
     total = len(audio) / SR
-    segments, info = model.transcribe(audio, language="zh", beam_size=5, vad_filter=True,
-                                      initial_prompt=PROMPT)
+    segments, info = model.transcribe(audio, language="zh", beam_size=max(1, int(beam_size or 5)),
+                                      vad_filter=True, initial_prompt=PROMPT)
     segs = []
     for s in segments:  # 生成器：边识别边返回，正好用来报进度
         if should_stop():
@@ -204,8 +252,8 @@ def _run_mlx(audio, repo, log, on_progress):
 
 
 def transcribe(path, *, engine="auto", mlx_model="mlx-community/whisper-large-v3-turbo", size="small",
-               use_mirror=False, max_minutes=15, log=print, should_stop=lambda: False,
-               on_progress=lambda f: None):
+               use_mirror=False, max_minutes=0, log=print, should_stop=lambda: False,
+               on_progress=lambda f: None, device="auto", beam_size=5):
     """返回 {"text", "segments", "duration", "engine"}。"""
     _setup_hf(use_mirror)
     audio = load_audio(path, max_minutes * 60 if max_minutes else None)
@@ -220,7 +268,7 @@ def transcribe(path, *, engine="auto", mlx_model="mlx-community/whisper-large-v3
             log(f"Mac 加速引擎出错（{str(e)[:120]}），改用通用引擎重试……")
             eng = "faster"
     if eng == "faster":
-        segs = _run_faster(audio, size, log, should_stop, on_progress)
+        segs = _run_faster(audio, size, log, should_stop, on_progress, device=device, beam_size=beam_size)
 
     segs = [{"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
             for s in segs if s["text"].strip()]

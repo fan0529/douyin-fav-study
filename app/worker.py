@@ -183,8 +183,9 @@ class Worker:
                     tr = transcribe.transcribe(
                         media, engine=s.get("asr_engine", "auto"), mlx_model=s.get("mlx_model"),
                         size=s.get("whisper_model", "small"), use_mirror=s.get("use_hf_mirror", False),
-                        max_minutes=s.get("max_minutes", 15), log=self.log, should_stop=self.stopping,
-                        on_progress=self.prog.set_frac)
+                        max_minutes=s.get("max_minutes", 0), log=self.log, should_stop=self.stopping,
+                        on_progress=self.prog.set_frac, device=s.get("whisper_device", "auto"),
+                        beam_size=s.get("whisper_beam", 5))
                 except transcribe.NoSpeech as e:
                     db.update(it["id"], status="skipped", reason=str(e))
                     self.log(f"[{it['id']}] 跳过：{e}")

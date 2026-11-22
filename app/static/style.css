@@ -165,26 +165,57 @@ h3 { margin: 0; font-size: 17px; font-weight: 600; }
 /* ---------------------------------------------------------------- 笔记详情 */
 .detail { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 36px; align-items: start; }
 .back { color: var(--link); font-size: 14px; display: inline-block; margin-bottom: 18px; }
-.note { max-width: 760px; }
-.note h1 { font-size: 34px; margin-bottom: 10px; }
+.note { max-width: 740px; }
+.note h1 { font-size: 34px; margin-bottom: 10px; letter-spacing: -.01em; }
 .note .meta { color: var(--ink-3); font-size: 13.5px; margin-bottom: 18px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.note section { margin: 34px 0; }
-.note section h2 { display: flex; align-items: center; gap: 8px; font-size: 21px; margin-bottom: 14px; }
-.summary { font-size: 17px; line-height: 1.8; background: var(--card); padding: 20px 22px; border-radius: var(--r-card); color: var(--ink); }
-.points { list-style: none; padding: 0; margin: 0; counter-reset: p; background: var(--card); border-radius: var(--r-card); }
-.points li { position: relative; padding: 14px 20px 14px 56px; border-bottom: 1px solid var(--line); counter-increment: p; font-size: 16px; line-height: 1.7; }
-.points li:last-child { border-bottom: 0; }
-.points li::before { content: counter(p); position: absolute; left: 18px; top: 15px; width: 24px; height: 24px; border-radius: 50%;
-  background: var(--accent); color: #fff; font-size: 12px; display: grid; place-items: center; font-weight: 600; }
-.steps { padding: 6px 20px; list-style: none; margin: 0; counter-reset: s; background: var(--card); border-radius: var(--r-card); }
-.steps li { counter-increment: s; display: grid; grid-template-columns: 52px 1fr; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 16px; line-height: 1.7; }
+.note section { margin: 40px 0 0; padding-top: 26px; border-top: 1px solid var(--line); }
+.note section h2 { display: flex; align-items: baseline; gap: 10px; font-size: 19px; margin-bottom: 16px; letter-spacing: .01em; }
+.note section h2 em { font-style: normal; font-weight: 400; font-size: 12.5px; color: var(--ink-3); }
+
+/* 顶部导览：总结 + 章节跳转 */
+.guide { background: var(--fill); border-radius: var(--r-card); padding: 18px 20px; margin-bottom: 6px; }
+.guide p { margin: 0; font-size: 16.5px; line-height: 1.85; color: var(--ink-2); }
+.guide .toc { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+.guide .toc a { font-size: 12.5px; color: var(--ink-3); background: var(--card); border-radius: var(--r-pill); padding: 3px 10px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide .toc a:hover { color: var(--link); text-decoration: none; }
+
+/* 逐段记录：小标题 + 正文，左侧一条竖线串起整段讲述 */
+.summary { font-size: 16px; line-height: 1.85; background: var(--fill); padding: 16px 18px; border-radius: var(--r-card); color: var(--ink-2); }
+.points { list-style: none; padding: 0; margin: 0; }
+.points li { position: relative; padding: 0 0 24px 20px; border-left: 2px solid var(--line); scroll-margin-top: 24px; }
+.points li:last-child { padding-bottom: 0; border-left-color: transparent; }
+.points li::before { content: ""; position: absolute; left: -5px; top: 8px; width: 8px; height: 8px; border-radius: 50%; background: var(--line-strong); }
+.points h3 { font-size: 16.5px; font-weight: 600; line-height: 1.5; margin: 0 0 6px; color: var(--ink); }
+.points p { margin: 0; font-size: 16px; line-height: 1.85; color: var(--ink-2); }
+
+.steps { padding: 0; margin: 0; list-style: none; counter-reset: s; }
+.steps li { counter-increment: s; display: grid; grid-template-columns: 26px 1fr; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 16px; line-height: 1.8; color: var(--ink-2); }
 .steps li:last-child { border-bottom: 0; }
-.steps li::before { content: "第 " counter(s) " 步"; font-size: 12px; color: var(--accent); font-weight: 600; padding-top: 4px; }
-.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
-.kv div { background: var(--card); border-radius: 14px; padding: 14px 16px; }
-.kv b { display: block; margin-bottom: 4px; font-weight: 600; }
-.kv span { color: var(--ink-3); font-size: 14px; line-height: 1.6; }
-.quiz .q { background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 10px; }
+.steps li::before { content: counter(s); margin-top: 3px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent-soft); color: var(--link);
+  font-size: 12px; font-weight: 600; display: grid; place-items: center; }
+
+/* 工具 / 概念：去卡片化，做成词条列表 */
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 0 28px; }
+.kv div { padding: 11px 0; border-bottom: 1px solid var(--line); }
+.kv b { display: block; margin-bottom: 3px; font-weight: 600; font-size: 15px; }
+.kv span { color: var(--ink-3); font-size: 14.5px; line-height: 1.75; }
+
+/* 记住这几条：跨段落的结论，结论一行加粗 + 说明一行浅色 */
+.takeaways { list-style: none; padding: 0; margin: 0; }
+.takeaways li { position: relative; padding-left: 24px; margin-bottom: 20px; }
+.takeaways li:last-child { margin-bottom: 0; }
+.takeaways li::before { content: ""; position: absolute; left: 3px; top: 8px; width: 9px; height: 9px; border-radius: 50%;
+  background: var(--accent); box-shadow: 0 0 0 4px rgba(0, 113, 227, .12); }
+.takeaways b { display: block; font-size: 16.5px; line-height: 1.65; font-weight: 600; color: var(--ink); margin-bottom: 5px; }
+.takeaways p { margin: 0; font-size: 14.5px; line-height: 1.8; color: var(--ink-3); }
+
+/* 自测：默认收起 */
+.quiz-fold summary { font-size: 14px; color: var(--ink-3); padding: 2px 0 4px; }
+.quiz-fold summary:hover { color: var(--link); }
+.quiz { margin-top: 8px; }
+.quiz .q { padding: 14px 0; border-bottom: 1px solid var(--line); }
+.quiz .q:last-child { border-bottom: 0; }
+.quiz .q b { font-size: 16px; line-height: 1.7; font-weight: 600; }
 .quiz .a { margin-top: 8px; color: var(--ok); display: none; }
 .quiz .q.open .a { display: block; }
 .transcript { white-space: pre-wrap; color: var(--ink-2); font-size: 15px; max-height: 420px; overflow: auto; background: var(--card);

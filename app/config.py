@@ -85,15 +85,19 @@ DEFAULTS = {
     "base_url": PROVIDERS["deepseek"]["base_url"],
     "model": PROVIDERS["deepseek"]["model"],
     "api_key": "",
+    "reasoning_effort": "low",          # 推理模型的思考档位：low / high / max；none = 交给服务商默认
+                                        # 思考也算在输出额度里，档位高容易把 JSON 写一半就截断
     "focus_topic": "AI / 人工智能相关的干货：AI 工具、提示词、AI 编程、AI 绘画和视频、大模型、用 AI 提升效率或赚钱的方法",
     "only_relevant": True,              # 只保留和关注主题相关的视频
     "categories": DEFAULT_CATEGORIES,
     "asr_engine": "auto",               # auto / mlx / faster —— auto：苹果芯片 Mac 用 mlx，其他用 faster-whisper
     "mlx_model": "mlx-community/whisper-large-v3-turbo",
     "whisper_model": "small",           # faster-whisper 用：tiny / base / small / medium
+    "whisper_device": "auto",           # auto / cuda / cpu —— auto：有 NVIDIA 显卡就用 GPU 转写（快十几倍）
+    "whisper_beam": 5,                  # 搜索宽度：1 最快，5 最准（GPU 上没必要调小）
     "use_subtitles": True,              # 视频自带字幕时直接用字幕，跳过下载和转写
     "use_hf_mirror": False,             # 在中国大陆时勾选：用 hf-mirror.com 下载模型
-    "max_minutes": 15,                  # 超长视频只转录前 N 分钟
+    "max_minutes": 0,                   # 0 = 转写整条视频；填 N 则只转前 N 分钟（省时间，但后面的内容会丢）
     "library_dir": "",                  # 留空 = 程序目录下的 data/知识库
     "keep_video": False,                # 转录完是否保留视频文件
     "browser": "auto",                  # auto / msedge / chrome / chromium

@@ -50,7 +50,17 @@ set BADLIST=
 set NBAD=0
 call :step "Douyin reader (playwright)" "playwright>=1.45"
 call :step "Speech to text (faster-whisper)" "faster-whisper>=1.0.3"
+call :step "Speech engine (ctranslate2)" "ctranslate2==4.5.0"
+call :step "setuptools (for ctranslate2)" "setuptools==80.9.0"
 call :step "Image text recognition (rapidocr)" "rapidocr-onnxruntime>=1.3.24"
+call :step "Image text engine (onnxruntime)" "onnxruntime==1.20.1"
+
+rem Optional GPU acceleration: only when an NVIDIA card is present (fast path for speech to text)
+where nvidia-smi >nul 2>nul && (
+  echo    NVIDIA GPU found, installing CUDA runtime for GPU transcription...
+  call :step "CUDA runtime (cublas)" "nvidia-cublas-cu12"
+  call :step "CUDA runtime (cudnn)" "nvidia-cudnn-cu12==9.*"
+)
 
 echo [3/3] Checking browser (Microsoft Edge is used by default)...
 %VPY% -c "import playwright" >nul 2>nul || goto summary

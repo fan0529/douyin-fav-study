@@ -8,14 +8,46 @@ import time
 import urllib.error
 import urllib.request
 
-MAX_CHARS = 6000  # 文字稿太长就截断，控制花费
+# 文字稿超过这个长度就截断（只影响发给 AI 的部分，原文转录照常完整保存）。
+# 默认「最长转录分钟数」是 15 分钟，中文口播约 4000 字；调到 20000 可以覆盖一小时左右的视频。
+MAX_CHARS = 20000
 
-SYSTEM = """你是一位擅长把短视频内容整理成学习笔记的助手。你会收到一条抖音视频的语音转文字稿，或者一条抖音图文笔记的正文和图片里识别出的文字（都可能有错别字或断行，请按上下文理解），需要提炼成结构化笔记。
+# 单次提炼最多让 AI 输出多少 token。详细版笔记比摘要版长得多，
+# 不写这个字段时服务商默认一般只有 4096，JSON 会在中间被截断。
+# 注意：推理类模型（GLM-5.x、Qwen3、o 系列等）的「思考」也算在这个额度里，
+# 思考能吃掉七八千，所以额度要给得比笔记本身的长度更大。
+NOTE_MAX_TOKENS = 16000
+
+# 提炼笔记时让推理模型少思考。实测 GLM-5.3-Flash：
+#   默认档 211 秒（思考 11261 token，还容易把额度吃光导致 JSON 截断）
+#   low 档 52 秒（思考 9 token，要点条数和质量基本一样）
+# 设置里把 reasoning_effort 改成 high/max 可以换回「想得更久」。
+NOTE_REASONING = "low"
+
+# 注意：这个模板用的是 str.replace 填占位符，不是 str.format，
+# 所以里面的 JSON 花括号可以直接写单括号，不用写成 {{ }}。
+SYSTEM = """你是一位「逐段还原型」的学习笔记记录员，不是摘要员。
+
+你会收到一条抖音视频的语音转文字稿，或者一条抖音图文笔记的正文和图片里识别出的文字（都可能有错别字或断行，请按上下文理解），需要整理成一份可以直接照着学的详细笔记。
 
 用户关注的主题：{focus}
 
-请严格只输出一个 JSON 对象，不要输出任何其他文字，格式如下：
-{{
+━━ 一、总原则：完整还原，不做压缩 ━━
+
+1. 按视频原本的讲述顺序记录。视频怎么讲，笔记就怎么排，不要重组成「三大要点」这种结构。
+2. 视频里出现的每一个知识点、每一个例子、每一组数字、每一个操作步骤、每一句「注意」「坑在这里」「我踩过」，都要收进笔记。
+3. 不许用概括句代替具体内容。
+   反例：「介绍了三种提高效率的方法」。
+   正例：「方法一：先把当天要做的事写在纸上，按 25 分钟一段拆开，每段结束休息 5 分钟（番茄工作法）」。
+4. 不许把不同段落的内容揉成一条，也不许为了显得简洁而删掉铺垫、类比、失败经验。只有寒暄、口头禅、明显重复的啰嗦可以略过。
+5. 视频里说错或前后矛盾的地方，照实记录，并在该条末尾补一句「（注：视频这里说的是 X，实际可能是 Y）」。
+6. 转写明显错乱、无法判断原意的片段，写「（此处转写不清，原意可能是……）」，不要凭空补全。
+
+━━ 二、输出格式 ━━
+
+请严格只输出一个 JSON 对象，不要输出任何其他文字，也不要用 ``` 包起来，格式如下：
+
+{
   "skip": false,
   "skip_reason": "",
   "relevant": true,
@@ -23,26 +55,50 @@ SYSTEM = """你是一位擅长把短视频内容整理成学习笔记的助手�
   "category": "从这些分类里选最合适的一个：{categories}；都不合适可以自拟一个简短分类",
   "tags": ["3-5个关键词"],
   "difficulty": "入门 / 进阶 / 高级 选一个",
-  "summary": "3-5 句话的详细总结",
-  "points": ["核心观点或知识点，每条一句话，3-8 条"],
-  "steps": ["如果视频教了可以照着做的方法，按顺序写出具体步骤；没有就给空数组"],
-  "tools": [{{"name": "视频提到的工具/网站/产品名", "use": "它是干什么用的"}}],
-  "concepts": [{{"term": "关键概念", "explain": "用大白话解释"}}],
-  "quiz": [{{"q": "根据视频内容出的一道自测题", "a": "答案"}}]
-}}
+  "summary": "80-150 字的全文导览：这条视频完整讲了什么、按什么顺序展开、适合什么基础的人看",
+  "points": ["按讲述顺序逐条记录，一般 12-30 条，每条 60-150 字"],
+  "tools": [{"name": "视频提到的工具/网站/产品名", "use": "它是干什么用的"}],
+  "concepts": [{"term": "一句判断句的结论，20字以内", "explain": "为什么重要、什么场合用得上，1-2句"}],
+  "quiz": [{"q": "根据视频内容出的一道自测题", "a": "答案"}]
+}
 
-规则：
-- 如果视频是广告带货、短剧剧情、唱歌跳舞、纯娱乐闲聊，或几乎没有实质信息，返回 {{"skip": true, "skip_reason": "简短原因"}}。
-- 如果有实质内容，但和用户关注的主题无关，"relevant" 填 false，其他字段照常填写。
-- 不要编造视频里没有的信息；转写里明显听错的专有名词（比如工具名）可以按常识纠正。
-- 全部使用简体中文。quiz 出 1-3 题。"""
+━━ 三、各字段怎么写 ━━
+
+▸ summary：不要写「本视频介绍了……」，直接写内容本身。
+
+▸ points：这是笔记的主体，也是「不删减」的落点。
+  · 每条最前面用【】写这一条的小标题，例如：【第一步：选素材】，后面跟具体内容。
+  · 每一项都必须是一个字符串，小标题和正文写在同一个字符串里，不要写成 ["小标题", "正文"] 这种数组。
+  · 一条只讲一件事。内容多就多分几条，不要全部挤在一条里。
+  · 必须保留视频里的具体例子、数字、参数、工具名、价格、失败经验、注意事项。
+  · 视频分章节讲的，章节名直接用作小标题；没有章节就按内容自然分段。
+  · 视频教了操作方法的，把步骤按实际操作顺序写进 points 里（每条一步或几步），不要另外单独列一份「照着做」的步骤清单——那会和上面的记录重复。
+
+▸ tools：除了名字和用途，视频里提到怎么用、免费还是收费、有什么限制，都写进 use 里。
+
+▸ concepts：这块不是术语表——术语的解释已经在 points 里写过了，不要再重复名词定义，也不要写工具名。
+  · 写「通篇读完之后才能得出的结论」，2-4 条。必须是跨越多个段落才成立的判断，不能是某一段的复述。
+  · term 写成一句判断句（20 字以内），例如「先搞懂每类技术解决什么问题，再学具体工具」；不要写成「反向代理」这种名词。
+  · explain 写为什么重要、在什么场合用得上，1-2 句，40-80 字。
+  · 其中一条的 explain 末尾可以补一句「延伸：…」，指出视频没展开、但值得继续了解的方向；没有合适内容就不写。
+
+▸ quiz：考细节和容易理解错的地方，不要考标题和主题。
+
+━━ 四、其他规则 ━━
+
+- 如果视频是广告带货、短剧剧情、唱歌跳舞、纯娱乐闲聊，或几乎没有实质信息，返回 {"skip": true, "skip_reason": "简短原因"}。
+- 如果有实质内容，但和用户关注的主题无关，"relevant" 填 false，其他字段照常详细填写。
+- 笔记正文一律用纯文本：不要用 **加粗**、## 标题、`代码` 这类 Markdown 标记，需要强调就用【】或「」。数字、英文缩写、专有名词保持原样。
+- 不要编造视频里没有的信息；转写里明显听错的专有名词（比如工具名、产品名）可以按常识纠正。
+- 全部使用简体中文。quiz 出 3-5 题。
+- 宁可写长，不要写短；但内容确实很多时，优先保证 points 写全，quiz 可以减到 3 题。"""
 
 USER = """标题：{title}
 作者：{author}
 {label}：
 {transcript}
 
-请提炼成学习笔记。"""
+请按视频原本的讲述顺序，完整还原成详细笔记：讲到的例子、数字、步骤、注意事项都要保留，不要压缩成概括。"""
 
 
 class LLMError(Exception):
@@ -67,6 +123,7 @@ def _as_cfg(c):
 
 
 _QUIRKS = {}  # (接口地址, 模型) → 这个模型需要的参数调整，记住后下次直接用
+_MAX_OUT = {}  # (接口地址, 模型) → 实测的单次输出上限，超过就一定被截断
 
 
 def _apply_quirks(payload, key):
@@ -76,12 +133,17 @@ def _apply_quirks(payload, key):
         payload["max_completion_tokens"] = max(payload.pop("max_tokens") * 2, 4000)
     if "no_temp" in q:
         payload.pop("temperature", None)
+    if "no_reason" in q:
+        payload.pop("reasoning_effort", None)
 
 
-def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeout=120, retry_429=True):
+def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeout=120, retry_429=True,
+         reasoning=None):
     """返回 (文本, 消耗的 token 数)。带重试：网络/5xx 重试 2 次，429/529 限速等 5 秒。
 
     cfg 可以是整份设置，也可以是 config.llm_cfg() 的结果。
+    reasoning：推理模型的思考档位 "low" / "high" / "max"，None 表示交给服务商默认。
+    服务商不认这个参数时会自动去掉（有些接口直接 400）。
     """
     cfg = _as_cfg(cfg)
     key = (cfg.get("api_key") or "").strip()
@@ -109,11 +171,14 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
         payload = {"model": model, "messages": messages, "temperature": temperature, "stream": False}
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        if reasoning:
+            payload["reasoning_effort"] = reasoning
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         _apply_quirks(payload, (base, model))
 
     attempt = 0
+    trunc_retry = False
     while True:
         attempt += 1
         try:
@@ -125,8 +190,31 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
                 if data.get("stop_reason") == "max_tokens" and json_mode:
                     raise LLMError("AI 输出太长被截断了，可以在设置里把精读分段字数调小再试")
             else:
-                text = data["choices"][0]["message"]["content"] or ""
+                ch = data["choices"][0]
+                text = ch["message"]["content"] or ""
                 used = (data.get("usage") or {}).get("total_tokens", 0)
+                if ch.get("finish_reason") == "length" and json_mode:
+                    # 输出到这个模型的上限了。原因多半是推理模型把额度花在「思考」上，
+                    # 正文只写了一半。先试一次更大的上限，不行就把能救的部分救回来。
+                    qk = (base, model)
+                    cur = payload.get("max_completion_tokens") or payload.get("max_tokens") or 0
+                    cap = _MAX_OUT.get(qk)
+                    if not trunc_retry and cur < 32000 and (cap is None or cur < cap):
+                        trunc_retry = True
+                        nxt = min(max(cur * 2, 8192), 32000)
+                        if "max_completion_tokens" in payload:
+                            payload["max_completion_tokens"] = nxt
+                        else:
+                            payload["max_tokens"] = nxt
+                        continue
+                    fixed = _salvage_json(text)
+                    if fixed is not None:
+                        print(f"[提醒] AI 输出被截断（上限 {cur} tokens），已按生成到一半的内容保存。",
+                              flush=True)
+                        return json.dumps(fixed, ensure_ascii=False), used
+                    raise LLMError(
+                        f"AI 输出被截断：单次最多只能写 {cur} 个 token，这条视频内容太长写不下。"
+                        "可以换输出上限更大的模型，或者把「最长转录分钟数」调小一点。")
             return text, used
         except urllib.error.HTTPError as e:
             body = ""
@@ -152,8 +240,15 @@ def chat(cfg, messages, json_mode=True, temperature=0.3, max_tokens=None, timeou
                 _QUIRKS.setdefault(qk, set()).add("no_temp")
                 payload.pop("temperature", None)
                 continue
+            # 有的接口不认思考档位，去掉重发
+            if e.code == 400 and "reasoning_effort" in payload and (
+                    "reasoning" in low or "thinking" in low or "思考" in body):
+                _QUIRKS.setdefault(qk, set()).add("no_reason")
+                payload.pop("reasoning_effort", None)
+                continue
             if e.code == 400 and (payload.get("max_tokens") or 0) > 4096 and "token" in low:
-                payload["max_tokens"] = 4096  # 免费模型通常限制单次最多输出 4096 tokens
+                _MAX_OUT[qk] = 4096  # 免费模型通常限制单次最多输出 4096 tokens，记住它
+                payload["max_tokens"] = 4096
                 continue
             if e.code == 400 and "response_format" in payload:
                 payload.pop("response_format")  # 有的模型不支持 JSON 模式，去掉再试
@@ -205,17 +300,60 @@ def _folded(messages):
     return [{"role": "user", "content": system}] + rest
 
 
+def _salvage_json(text):
+    """把被截断的 JSON 尽量救回来：丢掉最后一条不完整的元素，然后把括号补齐。
+
+    只在输出到上限被截断时用，救不回来返回 None。
+    """
+    t = (text or "").strip()
+    a = t.find("{")
+    if a < 0:
+        return None
+    t = t[a:]
+    stack, in_str, esc, cuts = [], False, False, []
+    for i, ch in enumerate(t):
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            stack.append("}" if ch == "{" else "]")
+        elif ch in "}]":
+            if not stack or stack[-1] != ch:
+                return None
+            stack.pop()
+        elif ch == ",":
+            cuts.append((i, tuple(stack)))  # 这里正好在两个元素之间，可以安全截断
+    for i, snap in reversed(cuts):
+        try:
+            d = json.loads(t[:i].rstrip() + "".join(reversed(snap)))
+        except Exception:
+            continue
+        if isinstance(d, dict) and d.get("points"):
+            return d
+    return None
+
+
 def chat_json(cfg, messages, **kw):
     """调用 AI 并把回复解析成 JSON，返回 (dict, 消耗的 token 数)。
 
-    回复不是 JSON 时，把 system 里的要求并进 user 消息再试一次；还不行才报错。
-    本来就能返回 JSON 的接口只请求一次。
+    回复不是 JSON 时，先把被截断的部分尽量补全；还不行就把 system 里的要求并进
+    user 消息再试一次；最后才报错。
     """
     text, used = chat(cfg, messages, **kw)
     try:
         return parse_json(text), used
     except Exception:
         pass
+    fixed = _salvage_json(text)
+    if fixed is not None:
+        return fixed, used
     retry = _folded(messages)
     if retry:
         text, more = chat(cfg, retry, **kw)
@@ -223,14 +361,49 @@ def chat_json(cfg, messages, **kw):
         try:
             return parse_json(text), used
         except Exception:
-            pass
+            fixed = _salvage_json(text)
+            if fixed is not None:
+                return fixed, used
+    if not (text or "").strip():
+        raise LLMError("AI 什么都没返回。多半是输出额度被模型的「思考」占满了："
+                       "换一个输出上限更大的模型，或把设置里的 reasoning_effort 改成 low")
     raise LLMError("AI 返回的不是有效的 JSON：" + (text or "")[:200])
 
 
 def _str_list(v):
     if isinstance(v, str):
         v = [v]
-    return [str(x).strip() for x in (v or []) if str(x).strip()]
+    out = []
+    for x in v or []:
+        if isinstance(x, (list, tuple)):  # 模型偶尔把一条要点拆成 ["小标题", "正文"]
+            x = " ".join(str(i).strip() for i in x if str(i).strip())
+        x = str(x).strip()
+        if x:
+            out.append(x)
+    return out
+
+
+_END_PUNCT = "。！？；：.!?;:，,"
+
+
+def _merge_headings(points):
+    """模型有时把小标题单独放成一条（如「开场：xxx」不带正文），把它并到下一句开头。
+
+    正常写法的每一条都以【小标题】开头、以句号结尾，不受影响。
+    """
+    out, buf = [], None
+    for p in points:
+        is_head = len(p) <= 24 and not p.startswith("【") and p[-1] not in _END_PUNCT
+        if is_head:
+            if buf:
+                out.append(buf)
+            buf = p
+            continue
+        out.append(f"【{buf}】{p}" if buf else p)
+        buf = None
+    if buf:
+        out.append(buf)
+    return out
 
 
 def _obj_list(v, keys):
@@ -257,7 +430,7 @@ def normalize(d: dict) -> dict:
         "tags": _str_list(d.get("tags"))[:6],
         "difficulty": str(d.get("difficulty") or "").strip(),
         "summary": str(d.get("summary") or "").strip(),
-        "points": _str_list(d.get("points")),
+        "points": _merge_headings(_str_list(d.get("points"))),
         "steps": _str_list(d.get("steps")),
         "tools": _obj_list(d.get("tools"), ["name", "use"]),
         "concepts": _obj_list(d.get("concepts"), ["term", "explain"]),
@@ -270,17 +443,28 @@ def normalize(d: dict) -> dict:
     return note
 
 
+def _reasoning_level(settings):
+    """思考档位：设置里写 low / high / max；写 none / off / default 表示交给服务商。"""
+    v = str(settings.get("reasoning_effort") or NOTE_REASONING).strip().lower()
+    return None if v in ("", "none", "off", "default", "auto") else v
+
+
 def extract(settings, title, author, transcript, kind="video"):
     """返回 (笔记 dict, token 数)。"""
     cats = "、".join(settings.get("categories") or [])
+    # 用 replace 填占位符（不是 format）：SYSTEM 里有 JSON 花括号，format 会把它们当占位符。
+    system = (SYSTEM
+              .replace("{focus}", settings.get("focus_topic") or "不限")
+              .replace("{categories}", cats))
     messages = [
-        {"role": "system", "content": SYSTEM.format(focus=settings.get("focus_topic") or "不限", categories=cats)},
+        {"role": "system", "content": system},
         {"role": "user", "content": USER.format(
             title=title or "（无）", author=author or "（未知）",
             label="图文笔记的正文和图片文字（【图N】是第 N 张图里识别出的文字）" if kind == "note" else "语音转文字稿",
             transcript=(transcript or "")[:MAX_CHARS])},
     ]
-    d, used = chat_json(settings, messages)
+    d, used = chat_json(settings, messages, max_tokens=NOTE_MAX_TOKENS,
+                        reasoning=_reasoning_level(settings), timeout=600)
     note = normalize(d)
     if not note.get("skip"):
         # AI 有时把「AI 编程」写成「AI编程」，同一个分类就被拆成两个；对上设置里的分类名
